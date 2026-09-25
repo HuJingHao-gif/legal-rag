@@ -1,0 +1,20 @@
+# 密钥：绝不提交
+api_key.txt
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 向量产物：chunks 有了就能重建（python data/embed.py），二进制又大，别进仓库
+*_vectors.npy
+
+# 临时运行日志
+data/run_log.txt
+data/run_stdout.txt
+data/run_stderr.txt
+
+# 内部工作文档（给 AI 会话的项目交接说明），不公开
+转交文档.md
