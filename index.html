@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+单文件页面，不引任何前端库 —— 这块本来就只打算花一天，
+时间和精力主要花在底下的检索和评测上。样式内联，省得配构建。
+-->
+<title>法律 RAG 问答 · 带引用可核验</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --line:#e3e6ea; --ink:#1f2328; --dim:#6b7280;
+    --accent:#1a73e8; --ok:#0f7b3f; --warn:#b45309; --code:#f2f4f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:21px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:18px;margin-bottom:16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  label{font-size:13px;color:var(--dim)}
+  select,input[type=number]{padding:7px 9px;border:1px solid var(--line);
+        border-radius:8px;background:#fff;font:inherit;font-size:14px}
+  textarea{width:100%;min-height:76px;padding:12px;border:1px solid var(--line);
+        border-radius:10px;font:inherit;resize:vertical}
+  button{padding:9px 18px;border:0;border-radius:9px;background:var(--accent);
+        color:#fff;font:inherit;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:#eef2f7;color:var(--ink);font-weight:500;
+        padding:6px 12px;font-size:13px;margin:4px 6px 0 0}
+  .presets{margin-top:10px}
+  .ans{white-space:pre-wrap;font-size:15.5px}
+  .cite{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
+  .chip{display:inline-block;background:#e8f0fe;color:#12408a;border-radius:7px;
+        padding:4px 11px;font-size:13.5px;font-weight:600;margin:4px 6px 0 0}
+  .badge{display:inline-block;font-size:12.5px;padding:3px 10px;border-radius:20px;
+        margin-left:8px;font-weight:600}
+  .badge.ok{background:#e6f4ea;color:var(--ok)}
+  .badge.bad{background:#fdecec;color:#c0392b}
+  details{margin-top:10px}
+  summary{cursor:pointer;font-size:13.5px;color:var(--dim);outline:none}
+  .src{border-left:3px solid var(--line);padding:8px 0 8px 12px;margin:10px 0;
+       font-size:13.5px}
+  .src b{font-size:13px}
+  .score{color:var(--dim);font-size:12px;font-weight:400}
+  .muted{color:var(--dim);font-size:12.5px}
+  .err{color:#c0392b}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>法律 RAG 问答</h1>
+  <div class="sub">答案只依据检索到的法条生成，<b>引用可逐条核验</b>——这是它与直接问大模型的根本区别。</div>
+
+  <div class="card">
+    <div class="row">
+      <label>语料库</label>
+      <select id="corpus"></select>
+      <label>召回条数 k</label>
+      <input type="number" id="k" value="5" min="1" max="10" style="width:68px">
+      <label>检索模式</label>
+      <select id="mode">
+        <option value="hybrid">hybrid</option>
+        <option value="dense">dense（纯向量）</option>
+        <option value="bm25">bm25（纯关键词）</option>
+        <option value="dense+rerank">dense+rerank</option>
+        <option value="hybrid+rerank">hybrid+rerank（v2-m3，慢，约 20s/题）</option>
+      </select>
+      <label><input type="checkbox" id="rewrite" checked> 查询改写</label>
+    </div>
+    <div style="margin-top:14px">
+      <textarea id="q" placeholder="用大白话问，例如：医保个人账户能不能给家里人用？"></textarea>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="go">提问</button>
+      <span class="muted" id="status"></span>
+    </div>
+    <div class="presets" id="presets"></div>
+  </div>
+
+  <div class="card" id="out" style="display:none">
+    <div class="ans" id="ans"></div>
+    <div class="cite">
+      <div>
+        <span class="muted">引用</span>
+        <span id="cites"></span>
+        <span id="verdict"></span>
+      </div>
+      <div class="muted" id="qinfo" style="margin-top:8px"></div>
+      <details>
+        <summary>查看检索依据（命中法条与相似度）</summary>
+        <div id="srcs"></div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function txt(tag, s, cls){
+  const e = document.createElement(tag);
+  e.textContent = s;                 // 一律 textContent，模型输出不能当 HTML 插进来
+  if (cls) e.className = cls;
+  return e;
+}
+
+async function loadCorpora(){
+  const r = await (await fetch('/corpora')).json();
+  const sel = $('corpus');
+  for (const [k, name] of Object.entries(r)){
+    const o = document.createElement('option');
+    o.value = k; o.textContent = name;
+    sel.appendChild(o);
+  }
+  sel.value = 'all';
+}
+
+async function loadPresets(){
+  try{
+    const r = await (await fetch('/presets')).json();
+    const box = $('presets');
+    for (const p of r.slice(0, 4)){
+      const b = txt('button', p, 'ghost');
+      b.onclick = () => { $('q').value = p; ask(); };
+      box.appendChild(b);
+    }
+  }catch(e){ /* 没有预设就算了，不影响主流程 */ }
+}
+
+async function ask(){
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('go').disabled = true;
+  $('status').textContent = '检索 + 生成中…（首次会加载模型，稍等）';
+  $('out').style.display = 'none';
+  try{
+    const res = await fetch('/ask', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({q, corpus:$('corpus').value, k:+$('k').value,
+                            mode:$('mode').value, rewrite:$('rewrite').checked})
+    });
+    const d = await res.json();
+    if (d.error){ throw new Error(d.error); }
+
+    const out = $('out');
+    out.style.display = 'block';
+    $('ans').replaceChildren(txt('div', d.answer));
+
+    const cs = $('cites'); cs.replaceChildren();
+    (d.citations || []).forEach(c => cs.appendChild(txt('span', c, 'chip')));
+    if (!d.citations || !d.citations.length)
+      cs.appendChild(txt('span', '（未给出引用）', 'muted'));
+
+    const v = $('verdict'); v.replaceChildren();
+    const ok = d['引用校验'] && d['引用校验']['通过'];
+    v.appendChild(txt('span', ok ? '✓ 引用可核验' : '✗ 引用存疑', 'badge ' + (ok?'ok':'bad')));
+
+    const m = d.meta;
+    $('qinfo').textContent =
+      `语料 ${m.语料}｜检索 ${m.模式}｜k=${m.k}｜改写 ${m.改写?'开':'关'}` +
+      (m.检索用查询 ? `｜检索用查询：${m.检索用查询.slice(0,90)}…` : '');
+
+    const box = $('srcs'); box.replaceChildren();
+    d.contexts.forEach((c, i) => {
+      const div = document.createElement('div');
+      div.className = 'src';
+      const head = document.createElement('div');
+      head.appendChild(txt('b', `${i+1}. ${c.条号}`));
+      head.appendChild(txt('span', `　《${c.法律}》　相似度 ${c.分数}`, 'score'));
+      div.appendChild(head);
+      div.appendChild(txt('div', c.正文));
+      box.appendChild(div);
+    });
+
+    const notes = (d['引用校验'] && d['引用校验']['说明']) || [];
+    if (notes.length) box.appendChild(txt('div', notes.join('；'), 'muted err'));
+
+    $('status').textContent = '';
+  }catch(e){
+    $('status').replaceChildren(txt('span', '出错了：' + e.message, 'err'));
+  }finally{
+    $('go').disabled = false;
+  }
+}
+
+$('go').onclick = ask;
+$('q').addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask();
+});
+loadCorpora().then(loadPresets);
+</script>
+</body>
+</html>

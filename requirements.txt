@@ -1,0 +1,15 @@
+# Python 3.10+（开发环境 3.13）
+anthropic>=1.2.0
+fastapi>=0.141.1
+uvicorn>=0.34.3
+pydantic>=2.13.5
+requests>=2.32.5
+
+# 检索
+numpy>=2.3.2
+jieba>=0.42.1
+sentence-transformers>=6.0.1
+
+# PyTorch 装 CPU 版就够（本地 rerank 约 20 秒/题）：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.13.0
