@@ -92,3 +92,31 @@
 {"tag": "answer_dense_hybrid_rw_new", "题数": 100, "引用正确率": 1.0, "口语化": 1.0, "法条原话": 1.0}
 {"tag": "answer_dense_hybrid_rw_minfadian", "题数": 100, "引用正确率": 0.99, "口语化": 0.9833, "法条原话": 1.0}
 {"tag": "answer_dense_hybrid_rw_laws", "题数": 100, "引用正确率": 1.0, "口语化": 1.0, "法条原话": 1.0}
+{"tag": "multihop_dense+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.08, "hit_all@10": 0.16, "hit_any@5": 0.66, "mean_cov@5": 0.3617}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_hybrid+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.16, "hit_all@10": 0.4, "hit_any@5": 0.81, "mean_cov@5": 0.4783}
+{"tag": "multihop_bm25+rw@all", "题数": 9, "hit_all@1": 0.0, "hit_all@5": 0.0, "hit_all@10": 0.0, "hit_any@5": 0.8889, "mean_cov@5": 0.3704}
+{"tag": "multihop_agentic_bm25@all", "题数": 9, "每轮k": 10, "最大轮数": 3, "各轮hit_all": [0.0, 0.2222, 0.2222], "各轮累计条数": [10.0, 15.11, 18.11], "单轮同尺寸对照": {"k=10": 0.0, "k=15": 0.2222, "k=18": 0.2222}, "平均用轮数": 2.556}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_agentic_bm25@all", "题数": 100, "每轮k": 10, "最大轮数": 3, "各轮hit_all": [0.47, 0.71, 0.74], "各轮累计条数": [10.0, 14.3, 15.96], "单轮同尺寸对照": {"k=10": 0.47, "k=14": 0.59, "k=16": 0.6}, "平均用轮数": 1.93}
+{"tag": "multihop_bm25@all", "题数": 9, "hit_all@1": 0.0, "hit_all@5": 0.0, "hit_all@10": 0.1111, "hit_any@5": 0.7778, "mean_cov@5": 0.3333}
+{"tag": "multihop_agentic_bm25@all", "题数": 9, "每轮k": 10, "最大轮数": 1, "各轮hit_all": [0.1111], "各轮累计条数": [10.0], "单轮同尺寸对照": {"k=10": 0.1111}, "平均用轮数": 1.0}
+{"tag": "multihop_bm25@all", "题数": 9, "hit_all@1": 0.0, "hit_all@5": 0.0, "hit_all@10": 0.1111, "hit_any@5": 0.7778, "mean_cov@5": 0.3333}
+{"tag": "multihop_agentic_bm25@all", "题数": 9, "每轮k": 3, "最大轮数": 1, "各轮hit_all": [0.0], "各轮累计条数": [3.0], "单轮同尺寸对照": {"k=3": 0.0}, "平均用轮数": 1.0}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_agentic_bm25@all", "题数": 100, "每轮k": 5, "最大轮数": 3, "各轮hit_all": [0.34, 0.59, 0.64], "各轮累计条数": [5.0, 7.47, 8.54], "单轮同尺寸对照": {"k=5": 0.34, "k=7": 0.4, "k=9": 0.44}, "平均用轮数": 2.08}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_dense+rw@all", "题数": 35, "hit_all@1": 0.0, "hit_all@5": 0.2857, "hit_all@10": 0.4286, "hit_any@5": 0.8286, "mean_cov@5": 0.5714}
+{"tag": "multihop_bm25+rw@all", "题数": 35, "hit_all@1": 0.0, "hit_all@5": 0.4571, "hit_all@10": 0.7143, "hit_any@5": 0.8857, "mean_cov@5": 0.6857}
+{"tag": "multihop_hybrid+rw@all", "题数": 35, "hit_all@1": 0.0, "hit_all@5": 0.4571, "hit_all@10": 0.7714, "hit_any@5": 0.8571, "mean_cov@5": 0.6667}
+{"tag": "multihop_bm25+rw@all", "题数": 35, "hit_all@1": 0.0, "hit_all@5": 0.4571, "hit_all@10": 0.7143, "hit_any@5": 0.8857, "mean_cov@5": 0.6857}
+{"tag": "multihop_bm25+rw@all", "题数": 35, "hit_all@1": 0.0, "hit_all@5": 0.4571, "hit_all@10": 0.7143, "hit_any@5": 0.8857, "mean_cov@5": 0.6857}
+{"tag": "multihop_agentic_bm25@all", "题数": 35, "每轮k": 5, "最大轮数": 3, "各轮hit_all": [0.4571, 0.7143, 0.7429], "各轮累计条数": [5.0, 7.03, 7.69], "单轮同尺寸对照": {"k=5": 0.4571, "k=7": 0.6571, "k=8": 0.6571}, "平均用轮数": 1.771}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_agentic_bm25@all", "题数": 100, "每轮k": 5, "最大轮数": 3, "各轮hit_all": [0.34, 0.51, 0.58], "各轮累计条数": [5.0, 7.36, 8.61], "单轮同尺寸对照": {"k=5": 0.34, "k=7": 0.4, "k=9": 0.44}, "平均用轮数": 2.14}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_agentic_bm25@all", "题数": 100, "每轮k": 5, "最大轮数": 3, "各轮hit_all": [0.34, 0.59, 0.6], "各轮累计条数": [5.0, 7.31, 8.19], "单轮同尺寸对照": {"k=5": 0.34, "k=7": 0.4, "k=8": 0.42}, "平均用轮数": 2.05}
+{"tag": "multihop_bm25+rw@all", "题数": 100, "hit_all@1": 0.0, "hit_all@5": 0.34, "hit_all@10": 0.47, "hit_any@5": 0.92, "mean_cov@5": 0.6233}
+{"tag": "multihop_agentic_bm25@all", "题数": 100, "每轮k": 5, "最大轮数": 3, "各轮hit_all": [0.34, 0.58, 0.64], "各轮累计条数": [5.0, 7.52, 8.57], "单轮同尺寸对照": {"k=5": 0.34, "k=8": 0.42, "k=9": 0.44}, "平均用轮数": 2.11}
+{"tag": "multihop_answer_single_bm25_多跳评测集", "题数": 100, "引用覆盖率": 0.61, "至少引中一条": 0.89, "全中率": 0.17, "多引条数": 1.04}
+{"tag": "multihop_answer_agentic_bm25_多跳评测集", "题数": 100, "引用覆盖率": 0.05, "至少引中一条": 0.08, "全中率": 0.0, "多引条数": 0.11}
