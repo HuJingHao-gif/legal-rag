@@ -12,6 +12,7 @@ FastAPI 和页面都只是壳，这层才是资产。
     python src/answer.py --corpus new --no-rewrite 医保个人账户能不能给家人用
 """
 import sys
+import re
 import json
 from pathlib import Path
 
@@ -88,25 +89,40 @@ PROMPT_MULTI = """你是法律助手。请**只依据下面提供的法条**回�
 #   所以按需切换，默认仍是老路径。
 
 
-def _validate(citations, hits):
-    """引用校验：模型给的引用必须真的出现在喂给它的资料里。
+_LAW_RE = re.compile(r"《([^》]+)》")
 
-    模型要是引了一条资料里没有的条文，说明它在凭记忆编 —— 这种引用对用户最危险，
-    看着挺权威，但那条文可能早就修订或废止了。
+
+def _validate(citations, hits):
+    """★ 引用校验：模型给的引用必须真的出现在喂给它的资料里。
+
+    这是"可核验"的落地——**如果模型引了一条不在资料里的法条，说明它在凭记忆编**，
+    这种引用对用户是危险的（看着很权威，但可能已经修订/废止）。
+
+    ★ 判据必须是 **(法名, 条号) 这一对**，不能分开判。合并库里"第一条"在 7 部法里都有，
+    分开判会把"把生态环境法典第一条说成民法典第一条"这种错放过去 ——
+    2026-09-27 写测试时撞出来的，当时的写法是 two 个独立的集合各自判断。
     """
-    allowed = {cn2int(c["条号"]) for _, c in hits}
-    laws = {c.get("简称") or c.get("law", "") for _, c in hits}
+    allowed = [((c.get("简称") or c.get("law") or ""), cn2int(c["条号"])) for _, c in hits]
     notes = []
     for cite in citations or []:
-        m = ART_RE.search(str(cite))
-        if not m:
+        s = str(cite)
+        m_art = ART_RE.search(s)
+        if not m_art:
             notes.append(f"引用格式无法解析：{cite}")
             continue
-        no = cn2int(m.group(0))
-        if no not in allowed:
+        no = cn2int(m_art.group(0))
+
+        same_no = [law for law, n in allowed if n == no]
+        if not same_no:
             notes.append(f"引用 {cite} 不在检索到的资料里 —— 可能是模型凭记忆编的，不可信")
-        elif not any((l and l in str(cite)) or ("民法典" in str(cite) and "民法典" in l) for l in laws):
-            notes.append(f"引用 {cite} 条号在资料里，但法律名对不上，请人工核对")
+            continue
+
+        # 条号对上了，再看法名对不对得上（没写法名的没法查，放过）
+        m_law = _LAW_RE.search(s)
+        if m_law:
+            cited_law = m_law.group(1)
+            if not any(cited_law in l or l in cited_law for l in same_no):
+                notes.append(f"引用 {cite} 条号在资料里，但法律名对不上，请人工核对")
     return (len(notes) == 0), notes
 
 

@@ -58,18 +58,32 @@ def law_hit(cited_law, gold_law):
     return gold_law in cited_law or cited_law in gold_law
 
 
-def score_one(citations, gold):
-    """返回 (命中数, 金标数, 多引数)"""
+def score_one(citations, gold, contexts):
+    """返回 (命中金标数, 金标总数, 多引数, 资料外的引用数, 资料里的金标数)。
+
+    最后两个才是引用校验要看的：
+      "资料外的引用" = 模型引了一条**根本没喂给它**的条文，也就是编的。
+      "资料里的金标" = 该捞到的捞到几条 —— 用它把题目分成"资料够/不够"两类，
+                       才能回答"检索不全时模型会不会补编"。
+    """
     cited = cited_pairs(citations)
-    used = set()
-    hit = 0
+    ctx = [(c.get("法律", ""), c["条号"]) for c in (contexts or [])]
+
+    used, hit = set(), 0
     for i, (glaw, gno) in enumerate(gold):
         for cl, cn in cited:
             if cn == cn2int(gno) and law_hit(cl, glaw):
                 hit += 1
                 used.add(i)
                 break
-    return hit, len(gold), max(0, len(cited) - len(used))
+
+    in_ctx = sum(1 for cl, cn in cited
+                 if any(cn == cn2int(no) and law_hit(cl, law) for law, no in ctx))
+    ctx_gold = sum(1 for glaw, gno in gold
+                   if any(cn2int(gno) == cn2int(no) and law_hit(glaw, law)
+                          for law, no in ctx))
+
+    return hit, len(gold), max(0, len(cited) - len(used)), len(cited) - in_ctx, ctx_gold
 
 
 def run_one(q, index, k, mode, use_rewrite, agentic, max_rounds):
@@ -109,8 +123,11 @@ def main(eval_file, index="all", k=5, mode="bm25", use_rewrite=True, agentic=Fal
             if err or r is None:
                 errs += 1
             else:
-                hit, n, extra = score_one(r.get("citations"), gold_of(q))
+                gold = gold_of(q)
+                hit, n, extra, fab, ctx_gold = score_one(
+                    r.get("citations"), gold, r.get("contexts"))
                 results.append({"id": q["id"], "hit": hit, "n": n, "extra": extra,
+                                "fab": fab, "ctx_gold": ctx_gold,
                                 "cites": r.get("citations")})
             if i % 20 == 0:
                 print(f"  {i}/{len(questions)}", flush=True)
@@ -130,12 +147,33 @@ def main(eval_file, index="all", k=5, mode="bm25", use_rewrite=True, agentic=Fal
     anyp = sum(1 for r in results if r["hit"] > 0) / tot
     extra = sum(r["extra"] for r in results) / tot
 
+    # 引用可核验性：模型有没有引用根本没喂给它的条文（= 编的）
+    clean = sum(1 for r in results if r["fab"] == 0) / tot
+    withfab = sum(1 for r in results if r["fab"] > 0) / tot
+    fab_avg = sum(r["fab"] for r in results) / tot
+
     print("\n" + "=" * 62)
     print(f"  n={tot}｜API 失败 {errs}")
     print(f"  引用覆盖率（平均答全几成）: {cov:.1%}")
     print(f"  至少引中一条             : {anyp:.1%}")
     print(f"  ★ 全中率（不多不少）     : {full:.1%}")
     print(f"  多引条数（每题平均）     : {extra:.2f}")
+    print("-" * 62)
+    print(f"  引用可核验性")
+    print(f"    引用全部能在资料里找到 : {clean:.1%}")
+    print(f"    出现编造引用           : {withfab:.1%}")
+    print(f"    编造条数（每题平均）   : {fab_avg:.2f}")
+    print("-" * 62)
+    print(f"  ★ 检索不全时会不会补编")
+    buckets = [("资料里金标齐全", lambda r: r["ctx_gold"] == r["n"]),
+               ("只捞到一部分",   lambda r: 0 < r["ctx_gold"] < r["n"]),
+               ("一条金标都没捞到", lambda r: r["ctx_gold"] == 0)]
+    for name, cond in buckets:
+        sub = [r for r in results if cond(r)]
+        if not sub:
+            continue
+        f = sum(1 for r in sub if r["fab"] > 0) / len(sub)
+        print(f"    {name:<16} n={len(sub):<4} 其中编造 {f:.1%}")
     print("=" * 62)
 
     worst = sorted(results, key=lambda r: r["hit"] / r["n"])[:3]
@@ -148,6 +186,8 @@ def main(eval_file, index="all", k=5, mode="bm25", use_rewrite=True, agentic=Fal
             "题数": tot, "引用覆盖率": round(cov, 4),
             "至少引中一条": round(anyp, 4), "全中率": round(full, 4),
             "多引条数": round(extra, 3),
+            "引用全在资料里": round(clean, 4), "出现编造引用": round(withfab, 4),
+            "编造条数每题": round(fab_avg, 3),
         }, ensure_ascii=False) + "\n")
 
 
