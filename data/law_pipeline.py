@@ -61,6 +61,7 @@ SETS = {
 
 # 正则
 ART_HEAD = re.compile(r"^(第[一二三四五六七八九十百千零]+条)(.*)$")   # 行首条号 + 同行残余正文
+ART_BRANCH = re.compile(r"^(第[一二三四五六七八九十百千零]+条)之[一二三四五六七八九十]+")  # 刑法式"条之一"
 DIV_HEAD = re.compile(r"^第[一二三四五六七八九十百千零]+(?:编|分编|章|节)")  # 编/章/节 标题行
 PAGE_NUM = re.compile(r"^[－\-—\s]*\d+[－\-—\s]*$")                   # 页脚：1 / －1－ / —1—
 
@@ -119,6 +120,14 @@ def stage_clean(key):
         # 断行处直接 join 不加空格，中文本来就没空格，英文加了会把单词劈开。
         arts, cur_no, cur_body, dropped = [], None, [], 0
         for l in body:
+            # "第X条之一" 必须在切条之前拦住：切条判据是"条号必须连续"，
+            # 而"第十条之一"的条号也算成 10，不连续就没切，正文被静默并进"第十条"，
+            # 下面那几道 gaps 校验照样通过 —— 内容丢了却一声不响。现有 7 部法没这种写法。
+            if (mb := ART_BRANCH.match(l)):
+                raise SystemExit(
+                    f"[clean] {law['简称']} 出现「{mb.group(0)}」：它和「{mb.group(1)}」是两条不同的条文，"
+                    f"当前按「条号必须连续」切条会把它的正文并进上一条。"
+                    f"要加含「之一」的法，先让切条支持这种写法。")
             if DIV_HEAD.match(l) and not ART_HEAD.match(l):
                 dropped += 1
                 continue

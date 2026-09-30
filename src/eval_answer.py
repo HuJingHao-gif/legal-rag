@@ -72,27 +72,10 @@ if not _key:
     raise SystemExit("没找到 API key（环境变量 DEEPSEEK_API_KEY 或 data/api_key.txt）")
 client = anthropic.Anthropic(base_url="https://api.deepseek.com/anthropic", api_key=_key)
 
-# 条号归一化：模型可能写"第1254条"也可能写"第一千二百五十四条"，都折算成整数才能比
-_D = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-_U = {"十": 10, "百": 100, "千": 1000}
-ART_RE = re.compile(r"第[一二三四五六七八九十百千零\d]+条")
-
-
-def cn2int(s):
-    s = str(s).strip().lstrip("第").rstrip("条")
-    if s.isdigit():
-        return int(s)
-    total = section = num = 0
-    for ch in s:
-        if ch in _D:
-            num = _D[ch]
-        elif ch in _U:
-            section += (num or 1) * _U[ch]
-            num = 0
-        elif ch == "万":
-            total += (section + num) * 10000
-            section = num = 0
-    return total + section + num
+# 条号归一化：模型可能写"第1254条"也可能写"第一千二百五十四条"，都折算成整数才能比。
+# 这里原来复制了一份实现，跟 textutil 的那份会各自漂移 —— "第X条之一"的拦截就漏了它，
+# 所以改成直接用同一份（sys.path 在上面已经加过 src/）。
+from textutil import cn2int, ART_RE
 
 
 def primary_citation(out):
