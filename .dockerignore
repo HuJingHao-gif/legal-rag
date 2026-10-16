@@ -1,0 +1,29 @@
+# 密钥不进镜像层：镜像一旦被推送，删文件也抹不掉历史层
+data/api_key.txt
+.env
+*.env
+
+.git
+.gitignore
+.venv/
+venv/
+**/__pycache__
+*.pyc
+
+tests/
+practice/
+scripts/
+scripts copy/
+
+转交文档.md
+
+# data/ 下混着清洗/分块/评测的管道脚本（历史原因，当时没放 scripts/），
+# 运行时用不到；应用只 import src/ 下的模块
+data/*.py
+
+data/run_log.txt
+data/run_stdout.txt
+data/run_stderr.txt
+
+# ★ *_vectors.npy 在 .gitignore 里是排除的，这里【必须放行】——
+#   应用运行时读不到向量文件就直接起不来。两套规则，相反的待遇。

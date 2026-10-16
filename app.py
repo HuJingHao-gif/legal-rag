@@ -12,6 +12,7 @@ FastAPI 服务：把 src/answer.py 包成 HTTP 接口。
     → http://127.0.0.1:8000
 """
 import json
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -140,4 +141,7 @@ def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # 默认 127.0.0.1：本地开发不把服务暴露到局域网。
+    # 容器里必须用 HOST=0.0.0.0，否则端口映射（-p 8000:8000）进不来。
+    uvicorn.run(app, host=os.environ.get("HOST", "127.0.0.1"),
+                port=int(os.environ.get("PORT", "8000")))
