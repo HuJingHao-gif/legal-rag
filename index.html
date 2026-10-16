@@ -6,6 +6,8 @@
 <!--
 单文件页面，不引任何前端库 —— 这块本来就只打算花一天，
 时间和精力主要花在底下的检索和评测上。样式内联，省得配构建。
+09-30 加了流式和对话历史，仍然没引库：流式是 fetch 读 SSE 流手写的，
+历史就是往 DOM 里追加卡片。
 -->
 <title>法律 RAG 问答 · 带引用可核验</title>
 <style>
@@ -33,7 +35,14 @@
   button.ghost{background:#eef2f7;color:var(--ink);font-weight:500;
         padding:6px 12px;font-size:13px;margin:4px 6px 0 0}
   .presets{margin-top:10px}
-  .ans{white-space:pre-wrap;font-size:15.5px}
+  .q{font-weight:600;margin-bottom:12px;padding-bottom:10px;
+     border-bottom:1px solid var(--line)}
+  .q::before{content:"问 ";color:var(--dim);font-weight:400}
+  .ans{white-space:pre-wrap;font-size:15.5px;min-height:1.2em}
+  /* 光标挂在 ::after 上，就不必往 .ans 里插元素 —— 正文是直接 textContent 覆盖写的 */
+  .ans.streaming::after{content:"▍";color:var(--accent);
+        animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
   .cite{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
   .chip{display:inline-block;background:#e8f0fe;color:#12408a;border-radius:7px;
         padding:4px 11px;font-size:13.5px;font-weight:600;margin:4px 6px 0 0}
@@ -55,7 +64,8 @@
 <body>
 <div class="wrap">
   <h1>法律 RAG 问答</h1>
-  <div class="sub">答案只依据检索到的法条生成，<b>引用可逐条核验</b>——这是它与直接问大模型的根本区别。</div>
+  <div class="sub">答案只依据检索到的法条生成，<b>引用可逐条核验</b>——这是它与直接问大模型的根本区别。<br>
+    对话历史只留在页面上：每次提问都是独立检索，不带上文。</div>
 
   <div class="card">
     <div class="row">
@@ -78,37 +88,32 @@
     </div>
     <div class="row" style="margin-top:12px">
       <button id="go">提问</button>
+      <button id="clear" class="ghost" type="button">清空对话</button>
       <span class="muted" id="status"></span>
     </div>
     <div class="presets" id="presets"></div>
   </div>
 
-  <div class="card" id="out" style="display:none">
-    <div class="ans" id="ans"></div>
-    <div class="cite">
-      <div>
-        <span class="muted">引用</span>
-        <span id="cites"></span>
-        <span id="verdict"></span>
-      </div>
-      <div class="muted" id="qinfo" style="margin-top:8px"></div>
-      <details>
-        <summary>查看检索依据（命中法条与相似度）</summary>
-        <div id="srcs"></div>
-      </details>
-    </div>
-  </div>
+  <div id="thread"></div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
+const thread = $('thread');
+let pinned = true;                       // 用户是不是贴着底部看；他自己往上滚了就别拽回来
 
-function txt(tag, s, cls){
+window.addEventListener('scroll', () => {
+  pinned = window.innerHeight + window.scrollY >= document.body.scrollHeight - 120;
+});
+
+function el(tag, s, cls){
   const e = document.createElement(tag);
-  e.textContent = s;                 // 一律 textContent，模型输出不能当 HTML 插进来
+  e.textContent = s ?? '';               // 一律 textContent，模型输出不能当 HTML 插进来
   if (cls) e.className = cls;
   return e;
 }
+
+function pin(){ if (pinned) window.scrollTo(0, document.body.scrollHeight); }
 
 async function loadCorpora(){
   const r = await (await fetch('/corpora')).json();
@@ -126,70 +131,147 @@ async function loadPresets(){
     const r = await (await fetch('/presets')).json();
     const box = $('presets');
     for (const p of r.slice(0, 4)){
-      const b = txt('button', p, 'ghost');
+      const b = el('button', p, 'ghost');
+      b.type = 'button';
       b.onclick = () => { $('q').value = p; ask(); };
       box.appendChild(b);
     }
   }catch(e){ /* 没有预设就算了，不影响主流程 */ }
 }
 
+/* 把 SSE 流拆成一个个事件。
+   fetch 拿到的是一个还没结束的字节流，切点可能落在一个事件中间，
+   所以留个 buf 攒着不完整的尾巴，等下一块到了再拼。 */
+async function readSSE(resp, onEvent){
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;){
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0){
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      let ev = 'message', data = '';
+      for (const line of block.split('\n')){
+        if (line.startsWith('event:')) ev = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (data) onEvent(ev, JSON.parse(data));
+    }
+  }
+}
+
+function newTurn(q){
+  const card = el('div', '', 'card turn');
+  card.appendChild(el('div', q, 'q'));
+  const ans = el('div', '', 'ans streaming');
+  const note = el('div', '', 'err');       // 生成中断之类，单独一行，不混进正文
+  card.append(ans, note);
+  thread.appendChild(card);
+  pin();
+  return {card, ans, note};
+}
+
+function buildCite(card, d, st){
+  const box = el('div', '', 'cite');
+  const row = el('div');
+  row.appendChild(el('span', '引用', 'muted'));
+  st.chips = el('span');
+  st.verdict = el('span');
+  row.append(st.chips, st.verdict);
+
+  const m = d.meta;
+  const qinfo = el('div',
+    `语料 ${m.语料}｜检索 ${m.模式}｜k=${m.k}｜改写 ${m.改写?'开':'关'}` +
+    (m.检索用查询 ? `｜检索用查询：${m.检索用查询}` : ''), 'muted');
+  qinfo.style.marginTop = '8px';
+
+  const srcs = el('div');
+  d.contexts.forEach((c, i) => {
+    const div = el('div', '', 'src');
+    const head = el('div');
+    head.appendChild(el('b', `${i+1}. ${c.条号}`));
+    head.appendChild(el('span', `　《${c.法律}》　相似度 ${c.分数}`, 'score'));
+    div.append(head, el('div', c.正文));
+    srcs.appendChild(div);
+  });
+
+  const det = document.createElement('details');
+  det.appendChild(el('summary', '查看检索依据（命中法条与相似度）'));
+  det.appendChild(srcs);
+
+  box.append(row, qinfo, det);
+  card.appendChild(box);
+  return box;
+}
+
+function onEvent(ev, d, st){
+  if (ev === 'meta'){
+    // 检索依据先到，先画出来 —— 这会儿模型还没吐第一个字
+    st.cite = buildCite(st.card, d, st);
+    pin();
+    return;
+  }
+  if (ev === 'delta'){
+    st.ans.textContent = d.text;         // 服务端每次发全量前缀，这里直接覆盖
+    pin();
+    return;
+  }
+  if (ev === 'done'){
+    st.ans.textContent = d.answer;       // 以服务端解出来的完整答案为准
+    st.ans.classList.remove('streaming');
+    (d.citations || []).forEach(c => st.chips.appendChild(el('span', c, 'chip')));
+    if (!(d.citations || []).length)
+      st.chips.appendChild(el('span', '（未给出引用）', 'muted'));
+    const ok = d['引用校验'] && d['引用校验']['通过'];
+    st.verdict.appendChild(el('span', ok ? '✓ 引用可核验' : '✗ 引用存疑',
+                              'badge ' + (ok ? 'ok' : 'bad')));
+    const notes = (d['引用校验'] && d['引用校验']['说明']) || [];
+    if (notes.length && st.cite) st.cite.appendChild(el('div', notes.join('；'), 'muted err'));
+    pin();
+    return;
+  }
+  if (ev === 'error'){
+    st.note.textContent = '生成中断：' + d.message;
+    st.ans.classList.remove('streaming');
+  }
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if (!q) return;
   $('go').disabled = true;
-  $('status').textContent = '检索 + 生成中…（首次会加载模型，稍等）';
-  $('out').style.display = 'none';
+  $('status').textContent = '检索中…（首次会加载模型，稍等）';
+  $('q').value = '';
+  pinned = true;                         // 刚点了提问，默认跟着看
+
+  const st = newTurn(q);
   try{
-    const res = await fetch('/ask', {
+    const res = await fetch('/ask/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({q, corpus:$('corpus').value, k:+$('k').value,
                             mode:$('mode').value, rewrite:$('rewrite').checked})
     });
-    const d = await res.json();
-    if (d.error){ throw new Error(d.error); }
-
-    const out = $('out');
-    out.style.display = 'block';
-    $('ans').replaceChildren(txt('div', d.answer));
-
-    const cs = $('cites'); cs.replaceChildren();
-    (d.citations || []).forEach(c => cs.appendChild(txt('span', c, 'chip')));
-    if (!d.citations || !d.citations.length)
-      cs.appendChild(txt('span', '（未给出引用）', 'muted'));
-
-    const v = $('verdict'); v.replaceChildren();
-    const ok = d['引用校验'] && d['引用校验']['通过'];
-    v.appendChild(txt('span', ok ? '✓ 引用可核验' : '✗ 引用存疑', 'badge ' + (ok?'ok':'bad')));
-
-    const m = d.meta;
-    $('qinfo').textContent =
-      `语料 ${m.语料}｜检索 ${m.模式}｜k=${m.k}｜改写 ${m.改写?'开':'关'}` +
-      (m.检索用查询 ? `｜检索用查询：${m.检索用查询.slice(0,90)}…` : '');
-
-    const box = $('srcs'); box.replaceChildren();
-    d.contexts.forEach((c, i) => {
-      const div = document.createElement('div');
-      div.className = 'src';
-      const head = document.createElement('div');
-      head.appendChild(txt('b', `${i+1}. ${c.条号}`));
-      head.appendChild(txt('span', `　《${c.法律}》　相似度 ${c.分数}`, 'score'));
-      div.appendChild(head);
-      div.appendChild(txt('div', c.正文));
-      box.appendChild(div);
-    });
-
-    const notes = (d['引用校验'] && d['引用校验']['说明']) || [];
-    if (notes.length) box.appendChild(txt('div', notes.join('；'), 'muted err'));
-
-    $('status').textContent = '';
+    if (!res.ok){
+      // 参数错走的是 400，不是 SSE，这里得单独接住
+      throw new Error('HTTP ' + res.status + '：' + (await res.text()).slice(0, 200));
+    }
+    $('status').textContent = '生成中…';
+    await readSSE(res, (ev, d) => onEvent(ev, d, st));
   }catch(e){
-    $('status').replaceChildren(txt('span', '出错了：' + e.message, 'err'));
+    onEvent('error', {message: e.message}, st);
   }finally{
+    st.ans.classList.remove('streaming');
     $('go').disabled = false;
+    $('status').textContent = '';
   }
 }
 
 $('go').onclick = ask;
+$('clear').onclick = () => { thread.replaceChildren(); pinned = true; };
 $('q').addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask();
 });

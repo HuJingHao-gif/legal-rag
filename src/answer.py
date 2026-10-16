@@ -126,6 +126,62 @@ def _validate(citations, hits):
     return (len(notes) == 0), notes
 
 
+_ANSWER_KEY = re.compile(r'"answer"\s*:\s*"')
+_JSON_ESC = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+             '"': '"', "\\": "\\", "/": "/"}
+
+
+def _partial_answer(buf):
+    """从**还没吐完**的 JSON 里，抠出 answer 字段到目前为止收到的那部分。
+
+    为什么不干脆让模型吐纯文本：PROMPT 的输出格式是评测口径的一部分，
+    citations 就藏在这段 JSON 里，改了格式单跳那批历史数字就对不上了。
+    所以格式不动，把 JSON 流在服务端切开，只把 answer 的字符串值推给页面。
+
+    每来一小段就整段重扫一遍。输出统共几 KB，重算的成本可以忽略，
+    换来的是不用维护"转义符只收到一半"那种状态机 —— 那种东西就算写错了
+    也只是少一个字，不报错，正是这个项目最怕的静默失败。
+    """
+    m = _ANSWER_KEY.search(buf)
+    if not m:
+        return None
+    i, out = m.end(), []
+    while i < len(buf):
+        ch = buf[i]
+        if ch == "\\":
+            nxt = buf[i + 1:i + 2]
+            if not nxt:
+                break                       # 转义符刚吐了一半，等下一段
+            if nxt == "u":
+                hexs = buf[i + 2:i + 6]
+                if len(hexs) < 4:
+                    break
+                try:
+                    out.append(chr(int(hexs, 16)))
+                except ValueError:
+                    break                   # \u 后面收到的还不是十六进制，等下一段
+                i += 6
+            else:
+                out.append(_JSON_ESC.get(nxt, nxt))
+                i += 2
+            continue
+        if ch == '"':
+            break                           # 引号闭合，answer 收完了
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _contexts(hits):
+    """检索结果 → 给页面/接口看的依据列表"""
+    return [{
+        "条号": c["条号"],
+        "法律": c.get("简称") or c.get("law", ""),
+        "分数": round(float(s), 4),
+        "正文": c["正文"],
+    } for s, c in hits]
+
+
 def ask(question, corpus="all", k=5, mode="hybrid", use_rewrite=True, multi_cite=False):
     """一次完整的问答，返回 dict，FastAPI 直接拿去序列化。
 
@@ -156,14 +212,55 @@ def ask(question, corpus="all", k=5, mode="hybrid", use_rewrite=True, multi_cite
         "answer": out.get("answer", ""),
         "citations": citations,
         "引用校验": {"通过": ok, "说明": notes},
-        "contexts": [{
-            "条号": c["条号"],
-            "法律": c.get("简称") or c.get("law", ""),
-            "分数": round(float(s), 4),
-            "正文": c["正文"],
-        } for s, c in hits],
+        "contexts": _contexts(hits),
         "meta": {"语料": corpus, "模式": mode, "k": k, "改写": use_rewrite,
                  "检索用查询": search_query if use_rewrite else None},
+    }
+
+
+def ask_stream(question, corpus="all", k=5, mode="hybrid", use_rewrite=True,
+               multi_cite=False):
+    """流式版 ask()：检索和引用校验照旧，只有"生成"这一步变成边收边吐。
+
+    yield (事件名, 数据) 二元组，app.py 包成 SSE。事件顺序：
+        meta           检索依据（条号/分数/正文）
+        delta *        正文前缀 —— 每次都发**全量**，页面直接覆盖，不做累加
+        done           最终答案 + 引用 + 校验结论
+
+    先推 meta 不是随手排的：检索本来就得先跑完（hybrid 在 CPU 上要几秒），
+    先把依据推下去，页面在等模型第一个字的时候就有东西可看。
+
+    生成中途出错就让它抛 —— 抛出去页面会显示"生成中断"。半截 JSON 意味着
+    答案本来就残缺，这时候安静地拿已经收到的半截当答案，等于把截断的正文
+    冒充成成品（这个项目在假成绩上栽过四次，不能再添一次）。
+    """
+    chunks, vectors, bm25 = _index(corpus)
+    search_query = rw.expand(question) if use_rewrite else question
+    hits = search(search_query, k=k, mode=mode, chunks=chunks, vectors=vectors, bm25=bm25)
+
+    yield "meta", {
+        "question": question,
+        "contexts": _contexts(hits),
+        "meta": {"语料": corpus, "模式": mode, "k": k, "改写": use_rewrite,
+                 "检索用查询": search_query if use_rewrite else None},
+    }
+
+    prompt = (PROMPT_MULTI if multi_cite else PROMPT).format(ctx=_build_ctx(hits), q=question)
+    buf, shown = "", ""
+    for piece in llm.ask_stream(prompt):
+        buf += piece
+        got = _partial_answer(buf)
+        if got is not None and got != shown:
+            shown = got
+            yield "delta", {"text": shown}
+
+    out = llm.parse_json(buf)
+    citations = out.get("citations") or []
+    ok, notes = _validate(citations, hits)
+    yield "done", {
+        "answer": out.get("answer", ""),
+        "citations": citations,
+        "引用校验": {"通过": ok, "说明": notes},
     }
 
 
@@ -258,12 +355,7 @@ def ask_agentic(question, corpus="all", k=5, mode="hybrid", use_rewrite=True, ma
         "answer": out.get("answer", ""),
         "citations": citations,
         "引用校验": {"通过": ok, "说明": notes},
-        "contexts": [{
-            "条号": c["条号"],
-            "法律": c.get("简称") or c.get("law", ""),
-            "分数": round(float(s), 4),
-            "正文": c["正文"],
-        } for s, c in hits],
+        "contexts": _contexts(hits),
         "meta": {"语料": corpus, "模式": mode, "k": k, "改写": use_rewrite,
                  "检索用查询": queries[0] if use_rewrite else None,
                  "检索轮数": len(rounds), "各轮查询": queries},

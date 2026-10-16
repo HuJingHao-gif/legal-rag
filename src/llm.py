@@ -45,16 +45,49 @@ def ask(prompt, retry=2):
             time.sleep(2)
 
 
+def parse_json(text):
+    """从模型输出里抠出 JSON。它偶尔会套 ``` 或加句废话。
+
+    单独抽出来是因为流式那条路径也要用：边收边推的时候只切 answer 字段，
+    等收完了走的还是这个函数 —— 两条路径解 JSON 的规则必须是同一个。
+    """
+    m = re.search(r"[\[{].*[\]}]", text, flags=re.S)
+    if not m:
+        raise ValueError(f"没找到 JSON。原文前 120 字：{text[:120]}")
+    return json.loads(m.group(0))
+
+
 def ask_json(prompt, retry=2):
-    """要模型输出 JSON。它偶尔会套 ``` 或加句废话，先正则抠出 [...] / {...} 再 parse。"""
+    """要模型输出 JSON，走 parse_json。"""
     for attempt in range(1, retry + 1):
         try:
-            text = ask(prompt, retry=1)
-            m = re.search(r"[\[{].*[\]}]", text, flags=re.S)
-            if not m:
-                raise ValueError(f"没找到 JSON。原文前 120 字：{text[:120]}")
-            return json.loads(m.group(0))
+            return parse_json(ask(prompt, retry=1))
         except Exception:
             if attempt == retry:
+                raise
+            time.sleep(2)
+
+
+def ask_stream(prompt, retry=2):
+    """流式版 ask()：边生成边 yield 正文，thinking 块一样丢掉。
+
+    messages.stream() 的 text_stream 只给 text_delta，reasoning 模型的
+    thinking 段是 thinking_delta，进不来 —— 跟 ask() 里那个
+    `if b.type == "text"` 是同一个口径。
+
+    已经吐出去东西之后就不再重试：前半截答案已经发到浏览器上了，
+    重来一遍会拼出两段接不上的话。这时候宁可抛出去，让页面显示"生成中断"。
+    """
+    for attempt in range(1, retry + 1):
+        yielded = False
+        try:
+            with client().messages.stream(model=MODEL, max_tokens=MAX_TOKENS,
+                                          messages=[{"role": "user", "content": prompt}]) as s:
+                for text in s.text_stream:
+                    yielded = True
+                    yield text
+            return
+        except Exception:
+            if yielded or attempt == retry:
                 raise
             time.sleep(2)
