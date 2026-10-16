@@ -109,39 +109,97 @@ PROMPT_MULTI = """你是法律助手。请**只依据下面提供的法条**回�
 
 
 _LAW_RE = re.compile(r"《([^》]+)》")
+# 正文里把"法名"和"条号"一起扫。法名是用来给**后面**出现的条号定语境的 ——
+# 法条行文就是这么走的（"《医疗保障法》第三十二条规定…"），所以见到法名就更新当前语境。
+_PROSE_RE = re.compile(r"《([^》]+)》|(" + ART_RE.pattern + ")")
 
 
-def _validate(citations, hits):
+def _judge(no, law, allowed, traceable=frozenset()):
+    """判一条引用过不过，没问题返回 None。
+
+    ★ 判据必须是 **(法名, 条号) 这一对**，不能分开判。合并库里"第一条"在 7 部法里都有，
+    分开判会把"把生态环境法典第一条说成民法典第一条"这种错放过去 ——
+    2026-09-27 写测试时撞出来的，当时的写法是两个独立的集合各自判断。
+
+    traceable = "模型看到的材料正文里出现过的条号"。命中它不算编造 ——
+    模型是在复述资料原文，不是自己加的。
+    """
+    same_no = [l for l, n in allowed if n == no]
+    if not same_no:
+        if no in traceable:
+            return None
+        return "不在检索到的资料里 —— 可能是模型凭记忆编的，不可信"
+    if law and not any(law in l or l in law for l in same_no):
+        return "条号在资料里，但法律名对不上，请人工核对"
+    return None
+
+
+def _validate(citations, hits, answer="", question=""):
     """★ 引用校验：模型给的引用必须真的出现在喂给它的资料里。
 
     这是"可核验"的落地——**如果模型引了一条不在资料里的法条，说明它在凭记忆编**，
     这种引用对用户是危险的（看着很权威，但可能已经修订/废止）。
 
-    ★ 判据必须是 **(法名, 条号) 这一对**，不能分开判。合并库里"第一条"在 7 部法里都有，
-    分开判会把"把生态环境法典第一条说成民法典第一条"这种错放过去 ——
-    2026-09-27 写测试时撞出来的，当时的写法是 two 个独立的集合各自判断。
+    ★ 要查**两处**，只查 citations 是不够的：
+      1. `citations` 字段 —— 模型"正式声明"的引用
+      2. **回答正文里点名的条号** —— 2026-10-10 补的。k=5 时正文可能顺手带出
+         四五条法条，而 citations 规定只有一条；只查 citations 的话，页面上那句
+         "引用可核验"就只保住了其中一条，其余全在裸奔。
+         触发点是用户在页面上撞出来的：同一道题两次回答，一次点名 4 条、
+         一次只点名 1 条 —— 那 4 条当时**没人查**。
+
+    ★ question 是干什么的：模型复述用户提问时，会把提问里的条号带进正文。
+    那种照样要提示"无法核验"（它确实不在资料里），但不该说成"模型凭记忆编的" ——
+    条号是用户自己给的。不区分的话，凡是"提问里带条号"的题都会冤枉模型。
     """
     allowed = [((c.get("简称") or c.get("law") or ""), cn2int(c["条号"])) for _, c in hits]
     notes = []
+
     for cite in citations or []:
         s = str(cite)
         m_art = ART_RE.search(s)
         if not m_art:
             notes.append(f"引用格式无法解析：{cite}")
             continue
-        no = cn2int(m_art.group(0))
+        m_law = _LAW_RE.search(s)
+        problem = _judge(cn2int(m_art.group(0)), m_law.group(1) if m_law else None, allowed)
+        if problem:
+            notes.append(f"引用 {cite} {problem}")
 
-        same_no = [law for law, n in allowed if n == no]
-        if not same_no:
-            notes.append(f"引用 {cite} 不在检索到的资料里 —— 可能是模型凭记忆编的，不可信")
+    # 问题里出现过的条号。用 ART_RE 直接扫、不走 articles_in ——
+    # 后者碰到「第X条之一」会抛错，而用户的问题里什么写法都可能有，不该把请求打挂。
+    asked = {cn2int(m.group(0)) for m in ART_RE.finditer(question or "")}
+
+    # ★ 模型"看到过"的条号：检索到的条文**正文里**提到的那些。
+    # 司法解释和民法典的条文常把外部法条写进自己正文（合同编通则解释第二十八条结尾就写着
+    # "依据……《担保制度解释》第六十八条的规定处理"），模型照抄资料时会把那个条号一并带出来。
+    # 不排除掉的话这类题会稳定误报：12 题抽样里两次告警，**两次都是这个原因**，
+    # 而且第一次我还把它误判成了"真命中" —— 只查了"语料里有没有这部法"，
+    # 没去查检索到的正文里写没写这个条号。判据的误报也得靠查，不能靠推。
+    in_text = {cn2int(m.group(0)) for _, c in hits for m in ART_RE.finditer(c.get("正文") or "")}
+    retrieved = {n for _, n in allowed}
+
+    # 正文：同一个条号出现多次只报一次
+    law, seen = None, set()
+    for m in _PROSE_RE.finditer(answer or ""):
+        if m.group(1):
+            law = m.group(1)
+            continue
+        tok, no = m.group(2), cn2int(m.group(2))
+        if (law, no) in seen:
+            continue
+        seen.add((law, no))
+        where = f"{tok}（《{law}》）" if law else tok
+
+        if no not in retrieved and no not in in_text and no in asked:
+            # 出处是提问本身，不是资料。照样说一声"无法核验"，但这是复述、不是编造。
+            notes.append(f"正文提到 {where} —— 它在你问的问题里出现过，但不在检索到的资料里，无法核验")
             continue
 
-        # 条号对上了，再看法名对不对得上（没写法名的没法查，放过）
-        m_law = _LAW_RE.search(s)
-        if m_law:
-            cited_law = m_law.group(1)
-            if not any(cited_law in l or l in cited_law for l in same_no):
-                notes.append(f"引用 {cite} 条号在资料里，但法律名对不上，请人工核对")
+        problem = _judge(no, law, allowed, in_text)
+        if problem:
+            notes.append(f"正文提到 {where} {problem}")
+
     return (len(notes) == 0), notes
 
 
@@ -224,7 +282,7 @@ def ask(question, corpus="all", k=5, mode="hybrid", use_rewrite=True, multi_cite
         out = {"answer": f"生成失败：{e}", "citations": []}
 
     citations = out.get("citations") or []
-    ok, notes = _validate(citations, hits)
+    ok, notes = _validate(citations, hits, out.get("answer", ""), question)
 
     return {
         "question": question,
@@ -275,7 +333,7 @@ def ask_stream(question, corpus="all", k=5, mode="hybrid", use_rewrite=True,
 
     out = llm.parse_json(buf)
     citations = out.get("citations") or []
-    ok, notes = _validate(citations, hits)
+    ok, notes = _validate(citations, hits, out.get("answer", ""), question)
     yield "done", {
         "answer": out.get("answer", ""),
         "citations": citations,
@@ -367,7 +425,7 @@ def ask_agentic(question, corpus="all", k=5, mode="hybrid", use_rewrite=True, ma
         out = {"answer": f"生成失败：{e}", "citations": []}
 
     citations = out.get("citations") or []
-    ok, notes = _validate(citations, hits)
+    ok, notes = _validate(citations, hits, out.get("answer", ""), question)
 
     return {
         "question": question,
