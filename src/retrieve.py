@@ -63,6 +63,11 @@ def _get_reranker():
     return _reranker
 
 
+def warm_embedder():
+    """把 embedding 模型先加载起来。服务器启动时调一次，别让第一个用户干等。"""
+    _get_embedder()
+
+
 def load_index(chunks_path=None, vectors_path=None):
     """读 chunk 和向量，顺手校一下行序对齐没对齐。"""
     chunks_path  = Path(chunks_path)  if chunks_path  else CHUNKS

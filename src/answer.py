@@ -14,10 +14,11 @@ FastAPI 和页面都只是壳，这层才是资产。
 import sys
 import re
 import json
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from retrieve import (search, load_index, build_bm25,
+from retrieve import (search, load_index, build_bm25, warm_embedder,
                       CHUNKS, VECTORS, SFJS_CHUNKS, SFJS_VECTORS, NEW_CHUNKS, NEW_VECTORS,
                       ALL_CHUNKS, ALL_VECTORS)
 from textutil import cn2int, ART_RE
@@ -40,6 +41,24 @@ def _index(corpus):
         chunks, vectors = load_index(*CORPORA[corpus]["idx"])
         _index_cache[corpus] = (chunks, vectors, build_bm25(chunks))
     return _index_cache[corpus]
+
+
+def warmup(corpus="all"):
+    """启动预热：把默认语料的索引（含 BM25）和 embedding 模型先加载好。
+
+    不预热的话，冷启动后的第一个问题要等 47~66 秒 —— 加载 bge-small，再加上
+    给 2802 条建 BM25。这段时间要么第一个用户等，要么服务器启动时等。选后者：
+    启动慢是确定的、看得见的，用户等是随机的、看起来像卡死。
+
+    只热默认语料。切到别的语料时那一份还是得现建，但那是用户主动切的，
+    等一次能接受；四份全建会把启动时间翻几倍。
+
+    失败就让它抛 —— 索引文件不在、或和向量行数对不上，早死比晚死好。
+    """
+    t0 = time.time()
+    _index(corpus)
+    warm_embedder()
+    print(f"预热完成：{corpus} 索引 + embedding 模型，用时 {time.time() - t0:.1f}s")
 
 
 PROMPT = """你是法律助手。请**只依据下面提供的法条**回答用户的问题。

@@ -13,6 +13,7 @@ FastAPI 服务：把 src/answer.py 包成 HTTP 接口。
 """
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -21,9 +22,18 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "src"))
-from answer import ask, ask_stream, CORPORA          # noqa: E402
+from answer import ask, ask_stream, warmup, CORPORA          # noqa: E402
 
-app = FastAPI(title="法律 RAG 问答", description="带引用的法律问答，可核验")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时先把默认语料的索引和模型热好。不热的话第一个问题要等 40~60 秒，
+    # 页面看着就像卡死了。这里同步做完再开始收请求，理由见 answer.warmup 的注释。
+    warmup()
+    yield
+
+
+app = FastAPI(title="法律 RAG 问答", description="带引用的法律问答，可核验", lifespan=lifespan)
 
 
 class AskReq(BaseModel):
